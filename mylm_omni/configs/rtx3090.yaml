@@ -10,8 +10,12 @@ model:
   base_model: "Qwen/Qwen3-1.7B"
   # A base model's license, tokenizer compatibility, and vision/audio support must be checked
   # independently before use. This text-only checkpoint is not an all-in-one multimodal model.
-  context_length: 1024
+  context_length: 1024   # first-stage training length, not the positional ceiling
+  max_position_embeddings: 262144
+  scratch_config: "configs/scratch-300m.json"
   gradient_checkpointing: true
+  factorized_vocab_embedding_dim: 384
+  vocabulary_loss_chunk_size: 32
 
 training:
   seed: 20261024

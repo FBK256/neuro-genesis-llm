@@ -11,8 +11,8 @@ from mylm_omni.modeling import MyLMConfig, MyLMForCausalLM
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-config", required=True)
-    parser.add_argument("--dtype-bytes", type=float, default=2.0,
-                        help="parameter/gradient bytes; e.g. 2 for BF16, 4 for FP32")
+    parser.add_argument("--dtype-bytes", type=float, default=4.0,
+                        help="parameter/gradient bytes; default matches FP32 parameter training")
     parser.add_argument("--optimizer-state-bytes", type=float, default=8.0,
                         help="bytes per parameter for two FP32 Adam moments")
     parser.add_argument("--master-weight-bytes", type=float, default=0.0,
@@ -34,6 +34,7 @@ def main() -> None:
         "parameter_count": count,
         "parameter_count_billions": count / 1e9,
         "config_vocab_size": config.vocab_size,
+        "embedding_dim": config.embedding_dim,
         "max_position_embeddings": config.max_position_embeddings,
         "hidden_size": config.hidden_size,
         "unique_layers": config.num_layers,

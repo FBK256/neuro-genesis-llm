@@ -24,6 +24,7 @@ train = [
   "wandb>=0.18",
 ]
 qat = ["torchao>=0.17"]
+low-memory = ["bitsandbytes>=0.44"]
 qlora = ["transformers>=4.57", "peft>=0.13", "bitsandbytes>=0.44", "accelerate>=1.0", "datasets>=3.0"]
 multimodal = ["transformers>=4.57", "peft>=0.13", "bitsandbytes>=0.44", "accelerate>=1.0", "pillow>=10.0", "datasets>=3.0"]
 audio = ["faster-whisper>=1.1"]

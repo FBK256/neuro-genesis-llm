@@ -21,6 +21,7 @@ class MyLMConfig:
     """Shape and runtime configuration for the scratch research model."""
 
     vocab_size: int = 262_144
+    embedding_dim: int = 384
     hidden_size: int = 512
     num_layers: int = 8
     num_heads: int = 8
@@ -29,12 +30,14 @@ class MyLMConfig:
     max_position_embeddings: int = 262_144
     # Backward-compatibility alias. New configs should use max_position_embeddings.
     max_seq_len: int | None = None
-    max_recurrent_steps: int = 4
+    max_recurrent_steps: int = 2
     gradient_checkpointing: bool = True
     dropout: float = 0.0
     image_feature_size: int | None = None
     depth_cost_weight: float = 0.002
     rms_norm_eps: float = 1e-6
+    rope_theta: float = 1_000_000.0
+    vocab_loss_chunk_size: int = 32
 
     def __post_init__(self) -> None:
         # Old configs and callers may still provide max_seq_len.
@@ -51,8 +54,14 @@ class MyLMConfig:
         self.max_seq_len = self.max_position_embeddings
         if self.vocab_size < 8:
             raise ValueError("vocab_size must be at least 8")
+        if self.embedding_dim < 1:
+            raise ValueError("embedding_dim must be positive")
         if self.hidden_size <= 0 or self.num_layers < 1:
             raise ValueError("hidden_size and num_layers must be positive")
+        if self.rope_theta <= 0:
+            raise ValueError("rope_theta must be positive")
+        if self.vocab_loss_chunk_size < 1:
+            raise ValueError("vocab_loss_chunk_size must be positive")
         if self.num_heads < 1 or self.hidden_size % self.num_heads:
             raise ValueError("hidden_size must be divisible by num_heads")
         if self.num_kv_heads < 1 or self.num_heads % self.num_kv_heads:
@@ -99,13 +108,14 @@ def _apply_rope(
     k: torch.Tensor,
     q_positions: torch.Tensor | None = None,
     k_positions: torch.Tensor | None = None,
+    theta: float = 10_000.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply split-half RoPE for full sequences or query subsets at original token positions."""
     head_dim = q.shape[-1]
     device = q.device
     calc_dtype = torch.float32
     inv_freq = 1.0 / (
-        10_000 ** (torch.arange(0, head_dim, 2, device=device, dtype=calc_dtype) / head_dim)
+        theta ** (torch.arange(0, head_dim, 2, device=device, dtype=calc_dtype) / head_dim)
     )
 
     def position_angles(
@@ -153,6 +163,7 @@ class CausalSelfAttention(nn.Module):
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = config.hidden_size // config.num_heads
         self.dropout = config.dropout
+        self.rope_theta = config.rope_theta
         self.q_proj = nn.Linear(config.hidden_size, config.num_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=False)
@@ -163,7 +174,7 @@ class CausalSelfAttention(nn.Module):
         q = self.q_proj(x).view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(batch, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(batch, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        q, k = _apply_rope(q, k)
+        q, k = _apply_rope(q, k, theta=self.rope_theta)
 
         # Expand only the view; grouped KV heads reduce learned parameters and cache footprint.
         repeat_factor = self.num_heads // self.num_kv_heads
@@ -171,11 +182,18 @@ class CausalSelfAttention(nn.Module):
             k = k.repeat_interleave(repeat_factor, dim=1)
             v = v.repeat_interleave(repeat_factor, dim=1)
 
-        if attention_mask is None:
+        if attention_mask is None or not bool(
+            (
+                attention_mask[:, 1:].to(dtype=torch.bool)
+                & ~attention_mask[:, :-1].to(dtype=torch.bool)
+            ).any()
+        ):
+            # Standard right padding is already hidden from valid queries by causal attention.
+            # Avoid materializing a [sequence, sequence] causal-plus-padding mask.
             attn_mask = None
             use_causal_flag = True
         else:
-            # True means a location is visible to SDPA. Combine padding and causal masks.
+            # Non-monotone masks (e.g. padded image prefixes) need an explicit mask.
             causal = torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool).tril()
             padding = attention_mask.to(device=x.device, dtype=torch.bool)[:, None, None, :]
             attn_mask = causal[None, None, :, :] & padding
@@ -342,13 +360,18 @@ class MyLMForCausalLM(nn.Module):
     def __init__(self, config: MyLMConfig) -> None:
         super().__init__()
         self.config = config
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
+        # Factorized embeddings preserve a large vocabulary without a [vocab, hidden] table.
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.embedding_dim)
+        self.embed_projection = (
+            nn.Linear(config.embedding_dim, config.hidden_size, bias=False)
+            if config.embedding_dim != config.hidden_size else nn.Identity()
+        )
         self.layers = nn.ModuleList([TransformerBlock(config) for _ in range(config.num_layers)])
         self.recurrent_block = TransformerBlock(config)
         self.depth_router = nn.Linear(config.hidden_size, config.max_recurrent_steps)
         self.final_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self.lm_head.weight = self.embed_tokens.weight
+        # This projects to the token-table dimension; vocabulary weights stay tied.
+        self.lm_head = nn.Linear(config.hidden_size, config.embedding_dim, bias=False)
         self.vision_projector = (
             nn.Sequential(
                 nn.Linear(config.image_feature_size, config.hidden_size),
@@ -364,6 +387,44 @@ class MyLMForCausalLM(nn.Module):
         return sum(
             p.numel() for p in self.parameters() if not trainable_only or p.requires_grad
         )
+
+    def _vocabulary_logits(self, hidden: torch.Tensor) -> torch.Tensor:
+        """Project hidden states to embedding space, then apply the tied token matrix."""
+        return F.linear(self.lm_head(hidden), self.embed_tokens.weight)
+
+    def _chunked_lm_loss(
+        self, hidden: torch.Tensor, shifted_labels: torch.Tensor
+    ) -> torch.Tensor:
+        """Exact cross entropy with bounded logit memory; recompute vocabulary projection in BP."""
+        from torch.utils.checkpoint import checkpoint
+
+        valid_count = shifted_labels.ne(-100).sum()
+        if int(valid_count.item()) == 0:
+            raise ValueError("labels contain no supervised next-token targets")
+        total_loss = hidden.new_zeros((), dtype=torch.float32)
+        chunk_size = self.config.vocab_loss_chunk_size
+
+        def chunk_loss(hidden_chunk: torch.Tensor, labels_chunk: torch.Tensor) -> torch.Tensor:
+            chunk_logits = self._vocabulary_logits(hidden_chunk)
+            return F.cross_entropy(
+                chunk_logits.float().reshape(-1, self.config.vocab_size),
+                labels_chunk.reshape(-1),
+                ignore_index=-100,
+                reduction="sum",
+            )
+
+        for start in range(0, hidden.shape[1], chunk_size):
+            end = min(start + chunk_size, hidden.shape[1])
+            hidden_chunk = hidden[:, start:end, :]
+            labels_chunk = shifted_labels[:, start:end]
+            if self.training and torch.is_grad_enabled():
+                chunk_sum = checkpoint(
+                    chunk_loss, hidden_chunk, labels_chunk, use_reentrant=False
+                )
+            else:
+                chunk_sum = chunk_loss(hidden_chunk, labels_chunk)
+            total_loss = total_loss + chunk_sum
+        return total_loss / valid_count
 
     @staticmethod
     def _activation_summary(
@@ -400,6 +461,7 @@ class MyLMForCausalLM(nn.Module):
         adaptive_inference: bool = False,
         return_trace: bool = False,
         logits_to_keep: int = 0,
+        return_logits: bool = True,
     ) -> dict[str, Any]:
         if input_ids.ndim != 2:
             raise ValueError("input_ids must have shape [batch, sequence]")
@@ -415,7 +477,7 @@ class MyLMForCausalLM(nn.Module):
             raise ValueError("logits_to_keep must be non-negative")
         if logits_to_keep and labels is not None:
             raise ValueError("logits_to_keep cannot be used when labels are provided")
-        x = self.embed_tokens(input_ids)
+        x = self.embed_projection(self.embed_tokens(input_ids))
         prefix_len = 0
 
         if image_features is not None:
@@ -543,22 +605,27 @@ class MyLMForCausalLM(nn.Module):
             selected_depth = depth_probs.argmax(dim=-1) + 1
 
         x = self.final_norm(x)
-        logits_hidden = x[:, -logits_to_keep:, :] if logits_to_keep else x
-        logits = self.lm_head(logits_hidden)
+        logits = None
+        if return_logits:
+            logits_hidden = x[:, -logits_to_keep:, :] if logits_to_keep else x
+            logits = self._vocabulary_logits(logits_hidden)
         loss = None
         lm_loss = None
-        depth_cost = logits.new_zeros((), dtype=torch.float32)
+        depth_cost = x.new_zeros((), dtype=torch.float32)
         if labels is not None:
             # Next-token prediction. Ignore image prefix and any masked label positions.
-            shift_logits = logits[:, :-1, :].contiguous().float()
             shift_labels = labels[:, 1:].contiguous()
             if not bool(shift_labels.ne(-100).any()):
                 raise ValueError("labels contain no supervised next-token targets")
-            lm_loss = F.cross_entropy(
-                shift_logits.view(-1, shift_logits.shape[-1]),
-                shift_labels.view(-1),
-                ignore_index=-100,
-            )
+            if return_logits:
+                shift_logits = logits[:, :-1, :].contiguous().float()
+                lm_loss = F.cross_entropy(
+                    shift_logits.reshape(-1, self.config.vocab_size),
+                    shift_labels.reshape(-1),
+                    ignore_index=-100,
+                )
+            else:
+                lm_loss = self._chunked_lm_loss(x[:, :-1, :], shift_labels)
             if self.config.depth_cost_weight:
                 if attention_mask is not None:
                     active = attention_mask.to(device=expected_depth.device, dtype=torch.bool)
@@ -643,7 +710,7 @@ class MyLMForCausalLM(nn.Module):
             raise ValueError("attention_mask must match input_ids")
         self.eval()
         image_prefix_len = int(image_features.shape[1]) if image_features is not None else 0
-        text_context_budget = self.config.max_seq_len - image_prefix_len
+        text_context_budget = self.config.max_position_embeddings - image_prefix_len
         if text_context_budget < 1:
             raise ValueError("image features leave no room for text tokens in max_seq_len")
         for _ in range(max_new_tokens):
@@ -718,7 +785,7 @@ class MyLMForCausalLM(nn.Module):
         input_device = input_ids.device
         original_prompt_tokens = int(input_ids.shape[1])
         image_prefix_len = int(image_features.shape[1]) if image_features is not None else 0
-        text_context_budget = self.config.max_seq_len - image_prefix_len
+        text_context_budget = self.config.max_position_embeddings - image_prefix_len
         if text_context_budget < 1:
             raise ValueError("image features leave no room for text tokens in max_seq_len")
         trace_steps: list[dict[str, Any]] = []

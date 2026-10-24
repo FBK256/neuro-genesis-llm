@@ -180,8 +180,69 @@ def test_forward_enforces_max_position_embeddings():
         num_heads=4,
         num_kv_heads=2,
         intermediate_size=64,
+        embedding_dim=16,
         max_position_embeddings=4,
         max_recurrent_steps=2,
     )).eval()
     with pytest.raises(ValueError, match="max_position_embeddings=4"):
         model(torch.tensor([[1, 2, 3, 4, 5]]))
+
+
+
+def test_factorized_embedding_uses_low_rank_tied_vocabulary_table():
+    config = MyLMConfig(
+        vocab_size=257, embedding_dim=16, hidden_size=32, num_layers=1,
+        num_heads=4, num_kv_heads=2, intermediate_size=64,
+        max_position_embeddings=32, max_recurrent_steps=2,
+    )
+    model = MyLMForCausalLM(config)
+    assert tuple(model.embed_tokens.weight.shape) == (257, 16)
+    assert model.lm_head.out_features == 16
+    assert model(torch.tensor([[1, 2, 3]]))["logits"].shape == (1, 3, 257)
+
+
+def test_chunked_vocabulary_loss_matches_dense_loss_and_backpropagates():
+    torch.manual_seed(19)
+    config = MyLMConfig(
+        vocab_size=67, embedding_dim=16, hidden_size=32, num_layers=1,
+        num_heads=4, num_kv_heads=2, intermediate_size=64,
+        max_position_embeddings=32, max_recurrent_steps=2,
+        vocab_loss_chunk_size=2, gradient_checkpointing=True, depth_cost_weight=0.0,
+    )
+    model = MyLMForCausalLM(config).train()
+    ids = torch.tensor([[1, 2, 3, 4, 5, 6], [4, 5, 6, 7, 0, 0]])
+    mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
+    labels = ids.clone()
+    labels[mask == 0] = -100
+    dense = model(ids, attention_mask=mask, labels=labels, return_logits=True)
+    chunked = model(ids, attention_mask=mask, labels=labels, return_logits=False)
+    assert chunked["logits"] is None
+    assert torch.allclose(dense["lm_loss"], chunked["lm_loss"], atol=1e-5, rtol=1e-5)
+    chunked["loss"].backward()
+    assert model.embed_tokens.weight.grad is not None
+    assert torch.isfinite(model.embed_tokens.weight.grad).all()
+
+
+def test_right_padding_uses_implicit_causal_mask(monkeypatch):
+    from mylm_omni.modeling import mor
+
+    config = MyLMConfig(
+        vocab_size=64, embedding_dim=16, hidden_size=32, num_layers=1,
+        num_heads=4, num_kv_heads=2, intermediate_size=64,
+        max_position_embeddings=16, max_recurrent_steps=1,
+    )
+    attn = mor.CausalSelfAttention(config).eval()
+    observed = {}
+    original = mor.F.scaled_dot_product_attention
+
+    def wrapped(q, k, v, *, attn_mask=None, dropout_p=0.0, is_causal=False, **kwargs):
+        observed["attn_mask"] = attn_mask
+        observed["is_causal"] = is_causal
+        return original(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
+                        is_causal=is_causal, **kwargs)
+
+    monkeypatch.setattr(mor.F, "scaled_dot_product_attention", wrapped)
+    with torch.no_grad():
+        attn(torch.randn(1, 8, 32), attention_mask=torch.tensor([[1, 1, 1, 1, 0, 0, 0, 0]]))
+    assert observed["attn_mask"] is None
+    assert observed["is_causal"] is True

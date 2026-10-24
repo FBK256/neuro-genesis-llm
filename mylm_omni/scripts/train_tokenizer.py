@@ -43,6 +43,8 @@ def main() -> None:
     parser.add_argument("--text-field", default="text")
     parser.add_argument("--vocab-size", type=int, default=262_144)
     parser.add_argument("--min-frequency", type=int, default=2)
+    parser.add_argument("--allow-smaller-vocab", action="store_true",
+                        help="allow a small corpus to produce fewer tokens than requested")
     parser.add_argument("--show-progress", action="store_true")
     args = parser.parse_args()
     if args.vocab_size < len(SPECIAL_TOKENS) + 256:
@@ -68,6 +70,13 @@ def main() -> None:
         trainer=trainer,
         length=None,
     )
+    actual_vocab_size = len(tokenizer.get_vocab())
+    if actual_vocab_size < args.vocab_size and not args.allow_smaller_vocab:
+        raise RuntimeError(
+            f"Tokenizer corpus produced {actual_vocab_size:,} tokens, below the requested "
+            f"{args.vocab_size:,}. Add representative text or explicitly pass "
+            "--allow-smaller-vocab and copy the actual size into the model config."
+        )
     fast = PreTrainedTokenizerFast(
         tokenizer_object=tokenizer,
         unk_token="<unk>",

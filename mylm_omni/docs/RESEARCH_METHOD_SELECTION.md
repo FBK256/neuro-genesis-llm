@@ -64,3 +64,12 @@
 - [TorchAO QAT workflow](https://docs.pytorch.org/ao/stable/workflows/qat.html)
 
 これらの論文や公式マニュアルは設計根拠であり、本リポジトリでの性能再現を意味しない。
+
+
+### RTX 3090 scratch baseline
+
+- `configs/scratch-300m.json`: around 293M parameters, 256K vocabulary with factorized 384-dimensional tied embeddings, hidden size 1,024, 16 layers, GQA 16Q/4KV.
+- Memory: activation checkpointing, chunked vocabulary loss, micro-batch 1.
+- Speed: fused AdamW when supported, BF16 autocast, implicit causal mask for right-padded text and throughput based on the actual non-padding token count.
+- Stability: warmup/cosine schedule, gradient norm clipping at 1.0, stop on non-finite loss/gradients, periodic checkpoints.
+- The 256K position limit is not the initial training sequence length. The old 1.66B model's checkpoints are architecture-incompatible.

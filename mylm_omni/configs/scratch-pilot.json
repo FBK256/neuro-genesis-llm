@@ -9,5 +9,8 @@
   "dropout": 0,
   "image_feature_size": null,
   "depth_cost_weight": 0.002,
-  "max_position_embeddings": 256
+  "max_position_embeddings": 256,
+  "embedding_dim": 64,
+  "rope_theta": 1000000,
+  "vocab_loss_chunk_size": 32
 }

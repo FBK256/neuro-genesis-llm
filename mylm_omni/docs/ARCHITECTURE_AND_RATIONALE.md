@@ -77,21 +77,28 @@ The implementation order is:
 
 Matrix-of-Thought is initially better implemented as outer orchestration—generate a few candidate approaches, critique with evidence, merge or reject—rather than as an unverified internal hidden-state algorithm.
 
-### Vocabulary and context-length settings
+### Vocabulary, parameter budget and context length
 
-The scratch-model baseline is configured with a **262,144-token vocabulary** and
-`max_position_embeddings=262144`. The tied input embedding/output projection means that
-moving from 32K to 256K tokens adds about **471.9 million parameters** at hidden size 2048;
-the resulting `scratch-1b.json` model is approximately **1.66B parameters**, not 1B. Use
-`scripts/estimate_model.py` as the actual source of truth for the chosen configuration.
+The target vocabulary remains **262,144** for this project, but 256K is not universal among
+small LLMs: Qwen3-0.6B uses 151,936, SmolLM2-360M 49,152, and SmolLM3-3B 128,256. A tied
+`[vocab, hidden]` table at hidden size 2048 previously consumed 536.9M parameters alone.
+FP32 parameters + gradients + two FP32 Adam moments require about 16 bytes/parameter, so the
+earlier ~1.66B model needed over 26 GB decimal before activations or logits: it was not a viable
+full-AdamW target for 24 GiB VRAM.
 
-The 256K value is a configured upper bound, **not a claim that 256K-token training or inference
-fits on an RTX 3090**. This implementation still uses dense causal attention and emits full
-vocabulary logits during training. At long sequence lengths, attention computation, masks and
-logit tensors can dominate memory/time. The training CLI intentionally retains a separate
-`--max-seq-len` cap (default 1024); raise it only after measuring the exact model, attention
-backend, batch size, dtype and loss path. 256K context quality also requires long-context
-training/evaluation; RoPE alone does not establish it.
+The new `scratch-300m.json` uses factorized tied embeddings (`embedding_dim=384`,
+`hidden_size=1024`), 16 unique layers, 16 query heads and 4 KV heads. The table is about
+100.7M parameters and the full model about **293M parameters**. The hidden state is projected
+to and from the embedding dimension; vocabulary logits reuse the same token table.
+
+`max_position_embeddings=262144` is a configured positional ceiling, not proof of 256K
+training fit or long-context quality. RoPE theta is 1,000,000, but context quality requires
+progressive length training and fixed long-context evaluation. Training defaults to 1,024
+tokens, activation checkpointing, BF16 autocast where supported, fused CUDA AdamW where
+available, and chunked vocabulary loss. Right-padded text batches avoid materializing a
+quadratic causal-plus-padding mask. Chunked loss recomputes the output projection during
+backward, trading some throughput for lower peak memory. Start at 1,024; grow through 2,048,
+4,096 and 8,192 only after VRAM and validation checks.
 
 ## 4. Practical multimodal path versus scratch model
 

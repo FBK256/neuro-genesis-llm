@@ -171,7 +171,7 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--optimizer", choices=("adamw", "adamw8bit"), default="adamw",
-                        help="adamw8bit requires optional bitsandbytes")
+                        help="fused CUDA AdamW is used when supported; adamw8bit saves optimizer VRAM")
     parser.add_argument("--parameter-dtype", choices=("fp32", "bf16"), default="fp32",
                         help="bf16 reduces memory, but requires CUDA plus AdamW8bit for this script")
     parser.add_argument("--warmup-steps", type=int, default=100)
@@ -205,10 +205,8 @@ def main() -> None:
 
     raw_config = _read_json(args.model_config)
     model_config = MyLMConfig(**raw_config)
-    model_config.max_position_embeddings = min(
-        model_config.max_position_embeddings, args.max_seq_len
-    )
-    model_config.max_seq_len = model_config.max_position_embeddings
+    if args.max_seq_len > model_config.max_position_embeddings:
+        parser.error("--max-seq-len cannot exceed max_position_embeddings")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     amp_enabled, amp_dtype = _autocast_settings(device)
 
@@ -223,7 +221,7 @@ def main() -> None:
     metrics_path = output_dir / "metrics.jsonl"
 
     train_data = JsonlTokenDataset(args.train_jsonl)
-    collator = TokenBatchCollator(args.pad_token_id, model_config.max_position_embeddings)
+    collator = TokenBatchCollator(args.pad_token_id, args.max_seq_len)
     sampler = EpochRandomSampler(train_data, seed=args.seed, epoch=0)
     train_loader = DataLoader(
         train_data, batch_size=args.batch_size, sampler=sampler,
@@ -251,10 +249,17 @@ def main() -> None:
             betas=(0.9, 0.95), eps=1e-8,
         )
     else:
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay,
-            betas=(0.9, 0.95), eps=1e-8,
-        )
+        optimizer_kwargs = {
+            "lr": args.learning_rate, "weight_decay": args.weight_decay,
+            "betas": (0.9, 0.95), "eps": 1e-8,
+        }
+        if device.type == "cuda":
+            try:
+                optimizer = torch.optim.AdamW(model.parameters(), **optimizer_kwargs, fused=True)
+            except (TypeError, RuntimeError):
+                optimizer = torch.optim.AdamW(model.parameters(), **optimizer_kwargs)
+        else:
+            optimizer = torch.optim.AdamW(model.parameters(), **optimizer_kwargs)
     def lr_lambda(step: int) -> float:
         if args.warmup_steps and step < args.warmup_steps:
             return max(1e-8, (step + 1) / args.warmup_steps)
@@ -335,6 +340,7 @@ def main() -> None:
     window_loss = 0.0
     last_loss_value = float("nan")
     window_micro_batches = 0
+    window_input_tokens = 0
     micro_since_update = 0
     last_epoch = epoch
     last_next_batch_index = next_batch
@@ -356,6 +362,7 @@ def main() -> None:
                     labels=batch["labels"],
                     image_features=batch.get("image_features"),
                     image_attention_mask=batch.get("image_attention_mask"),
+                    return_logits=False,
                 )
                 loss = result["loss"]
             if loss is None or not bool(torch.isfinite(loss)):
@@ -372,6 +379,7 @@ def main() -> None:
                 loss_for_backward.backward()
             window_loss += float(loss.detach().item())
             window_micro_batches += 1
+            window_input_tokens += int(batch["attention_mask"].sum().item())
             micro_since_update += 1
 
             end_of_epoch = batch_index == len(train_loader) - 1
@@ -421,14 +429,10 @@ def main() -> None:
                     "train_loss_window": mean_loss,
                     "learning_rate": optimizer.param_groups[0]["lr"],
                     "gradient_norm": float(grad_norm.detach().float().cpu()),
-                    "tokens_per_second_estimate": (
-                        args.batch_size * args.max_seq_len * measured_steps
-                        * args.gradient_accumulation / elapsed
-                    ),
+                    "tokens_per_second_estimate": window_input_tokens / elapsed,
                     "step_seconds_estimate": elapsed / measured_steps,
                     "estimated_linear_train_flops_per_second": (
-                        estimated_train_flops_per_token * args.batch_size * args.max_seq_len
-                        * args.gradient_accumulation / max(elapsed / measured_steps, 1e-9)
+                        estimated_train_flops_per_token * window_input_tokens / elapsed
                     ),
                     "elapsed_seconds": now - total_start,
                     "eta_seconds": remaining_seconds,
@@ -451,6 +455,7 @@ def main() -> None:
                     f"ETA~{remaining_seconds/60:.1f}m"
                 )
                 window_start, window_loss, window_micro_batches = now, 0.0, 0
+                window_input_tokens = 0
                 window_start_step = global_step
 
             if did_update and global_step > 0 and global_step % args.checkpoint_steps == 0:

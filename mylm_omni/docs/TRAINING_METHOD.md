@@ -53,7 +53,7 @@ python scripts/train_tokenizer.py \
   --vocab-size 262144
 ```
 
-The baseline target vocabulary is 262,144. The trainer may produce fewer tokens if the corpus cannot support the requested number of merges; always use the actual `vocab_size` from `tokenizer/.../manifest.json` in the model config. The scratch baseline's configured maximum is `max_position_embeddings=262144`, but the training CLI defaults to `--max-seq-len 1024` to keep the initial run bounded. The current dense-attention/full-logit implementation is not validated for 256K-token execution, especially on 24GB VRAM.
+The target vocabulary is 262,144. The tokenizer script errors if the corpus produces fewer tokens; add representative text or explicitly pass `--allow-smaller-vocab` for a pilot and copy the actual manifest size into the model config. The positional limit `max_position_embeddings=262144` is separate from training length, which defaults to 1,024. This setting alone does not imply long-context quality.
 
 Then tokenize with a tokenizer-specific preprocessing adapter. The current `prepare_text_dataset.py` creates `input_ids` JSONL for full-sequence language modelling; if training the custom model, ensure `model-config.vocab_size` exactly equals the trained tokenizer size.
 
@@ -68,13 +68,22 @@ python scripts/train_scratch.py \
   --checkpoint-steps 10 --output-dir runs/mylm-smoke
 ```
 
-The `scratch-1b.json` filename is retained for continuity, but with a 262,144-token tied vocabulary this configuration is approximately 1.66B parameters. It is a research starting point, not a pre-trained model or a fit guarantee:
+The RTX 3090 scratch baseline is `configs/scratch-300m.json`, approximately 293M parameters. It factorizes the 256K vocabulary to 384 dimensions rather than allocating a 262,144 × 2,048 table.
 
 ```bash
-python scripts/estimate_model.py --model-config configs/scratch-1b.json --activation-gb 12
+python scripts/estimate_model.py --model-config configs/scratch-300m.json --activation-gb 8
+python scripts/train_scratch.py \
+  --model-config configs/scratch-300m.json \
+  --train-jsonl data/text/tokens.jsonl \
+  --eval-jsonl data/text/frozen-eval.jsonl \
+  --max-steps 2000 --batch-size 1 --gradient-accumulation 16 \
+  --max-seq-len 1024 --checkpoint-steps 100 \
+  --output-dir runs/mylm-scratch-300m --resume never
 ```
 
-The rough optimizer memory formula excludes sequence-length-dependent attention activations, CUDA workspaces, temporary logits, allocator fragmentation and data prefetch. Measure the actual first forward/backward pass, and retain 15–25% headroom at minimum. With long context and full AdamW states, a large scratch model can exceed 24GB even when weights alone fit.
+This model is **not checkpoint-compatible** with the previous 1.66B architecture; use a new output directory and `--resume never`. Training uses activation checkpointing, BF16 autocast when supported, fused CUDA AdamW when available, gradient clipping and non-finite loss/gradient checks. Chunked vocabulary loss avoids retaining the full `[batch, sequence, 262144]` logits tensor; its output projection is recomputed during backward, trading some throughput for reduced peak memory.
+
+For lower optimizer memory, install `pip install -e ".[low-memory,dev]"` and use `--optimizer adamw8bit --parameter-dtype bf16`. Start at sequence length 1,024 and batch size 1; increase only after a complete GPU step test. 256K is not a realistic initial training length on 24GB VRAM. Use a length curriculum (1K → 2K → 4K → 8K → longer) and fixed long-context evaluations. Keep 15–25% VRAM headroom and treat the first real step as the final fit test.
 
 ## 2. Dataset building and provenance
 
@@ -176,7 +185,7 @@ The custom TorchAO QAT script is a research scaffold. It must pass unit tests an
 
 ## 6. Hardware-specific starting points
 
-- **RTX 3090 24GB, 64GB RAM:** use pretrained multimodal QLoRA, context 512–1024 and batch size 1 first. Do not start a 1B scratch full-AdamW run as the default.
+- **RTX 3090 24GB, 64GB RAM:** use QLoRA/SFT on a pretrained 0.6B–1.7B model for practical capability. For scratch research start with `scratch-300m.json`, sequence length 1,024, micro-batch 1 and chunked loss. Do not begin at 256K sequence length.
 - **A100 40GB:** longer sequences/larger accumulations after measuring actual memory; keep periodic external checkpoints.
 - **A100 80GB / RTX PRO 6000 96GB:** custom scratch architecture and denser-teacher experiments are more plausible; validate throughput and dataset I/O, not only allocated VRAM.
 - **Colab:** assume the runtime may terminate unexpectedly. Checkpoint every 100 optimizer steps, persist resumable state to durable storage and verify the checkpoint after writing.
