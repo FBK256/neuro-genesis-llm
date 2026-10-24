@@ -299,6 +299,6 @@ def test_transformer_initialization_scales_residual_projections():
     torch.manual_seed(77)
     model = MyLMForCausalLM(config)
     expected_std = 0.02 / (2.0 * (config.num_layers + config.max_recurrent_steps)) ** 0.5
-    observed_std = float(model.layers[0].attn.o_proj.weight.std())
+    observed_std = float(model.layers[0].attn.o_proj.weight.std().detach())
     assert abs(observed_std - expected_std) < expected_std * 0.15
     assert torch.allclose(model.final_norm.weight, torch.ones_like(model.final_norm.weight))
