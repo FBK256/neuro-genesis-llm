@@ -286,3 +286,19 @@ def test_chunked_eval_metrics_do_not_require_full_vocabulary_logits():
     assert output["supervised_tokens"] == 4
     assert 0 <= output["correct_tokens"] <= 4
     assert torch.isfinite(output["lm_loss"])
+
+
+
+def test_transformer_initialization_scales_residual_projections():
+    config = MyLMConfig(
+        vocab_size=64, embedding_dim=16, hidden_size=32, num_layers=2,
+        num_heads=4, num_kv_heads=2, intermediate_size=64,
+        max_position_embeddings=32, max_recurrent_steps=2,
+        depth_cost_weight=0.0,
+    )
+    torch.manual_seed(77)
+    model = MyLMForCausalLM(config)
+    expected_std = 0.02 / (2.0 * (config.num_layers + config.max_recurrent_steps)) ** 0.5
+    observed_std = float(model.layers[0].attn.o_proj.weight.std())
+    assert abs(observed_std - expected_std) < expected_std * 0.15
+    assert torch.allclose(model.final_norm.weight, torch.ones_like(model.final_norm.weight))

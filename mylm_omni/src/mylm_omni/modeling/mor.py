@@ -383,6 +383,27 @@ class MyLMForCausalLM(nn.Module):
             if config.image_feature_size is not None
             else None
         )
+        self._initialize_transformer_weights()
+
+    def _initialize_transformer_weights(self) -> None:
+        """Use Transformer-style normal init and scale residual projections for stability."""
+        for module in self.modules():
+            if isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            elif isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, RMSNorm):
+                nn.init.ones_(module.weight)
+
+        # The shared recurrent block is reused multiple times. Scale every residual-output
+        # projection by the effective number of block applications to control residual growth.
+        effective_depth = self.config.num_layers + self.config.max_recurrent_steps
+        residual_std = 0.02 / (2.0 * effective_depth) ** 0.5
+        for block in [*self.layers, self.recurrent_block]:
+            nn.init.normal_(block.attn.o_proj.weight, mean=0.0, std=residual_std)
+            nn.init.normal_(block.ffn.down_proj.weight, mean=0.0, std=residual_std)
 
     def num_parameters(self, trainable_only: bool = False) -> int:
         """Count parameters; set trainable_only=True to count only parameters with gradients."""
