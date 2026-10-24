@@ -1,0 +1,13 @@
+{
+  "vocab_size": 32000,
+  "hidden_size": 2048,
+  "num_layers": 24,
+  "num_heads": 16,
+  "num_kv_heads": 4,
+  "intermediate_size": 5632,
+  "max_seq_len": 2048,
+  "max_recurrent_steps": 2,
+  "dropout": 0.0,
+  "image_feature_size": 768,
+  "depth_cost_weight": 0.002
+}

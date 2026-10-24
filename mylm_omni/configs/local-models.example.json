@@ -1,0 +1,141 @@
+{
+  "models": [
+    {
+      "profile": {
+        "model_id": "text-small-sft",
+        "backend_type": "hf-text",
+        "model_ref": "models/text-small-sft",
+        "modalities": [
+          "text"
+        ],
+        "task_quality": {
+          "general": 0.82,
+          "code": 0.63,
+          "tool_planning": 0.79
+        },
+        "task_latency_ms": {
+          "general": 95,
+          "code": 110,
+          "tool_planning": 90
+        },
+        "estimated_vram_gb": 5,
+        "max_context_tokens": 4096,
+        "local_only": true,
+        "enabled": false,
+        "eval_set_version": "replace-with-your-frozen-eval-set-version",
+        "model_revision": "replace-with-local-model-checksum-or-revision",
+        "parameter_count": 1700000000
+      },
+      "backend_args": {
+        "device": "auto",
+        "max_input_tokens": 4096
+      }
+    },
+    {
+      "profile": {
+        "model_id": "vision-small",
+        "backend_type": "hf-qwen3-vl",
+        "model_ref": "models/vision-small",
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "task_quality": {
+          "general": 0.8,
+          "visual_qa": 0.86,
+          "ocr": 0.77,
+          "tool_planning": 0.72
+        },
+        "task_latency_ms": {
+          "general": 140,
+          "visual_qa": 180,
+          "ocr": 165,
+          "tool_planning": 150
+        },
+        "estimated_vram_gb": 12,
+        "max_context_tokens": 4096,
+        "local_only": true,
+        "enabled": false,
+        "eval_set_version": "replace-with-your-frozen-eval-set-version",
+        "model_revision": "replace-with-local-model-checksum-or-revision",
+        "parameter_count": 2000000000
+      },
+      "backend_args": {
+        "device": "auto",
+        "max_input_tokens": 4096
+      }
+    },
+    {
+      "profile": {
+        "model_id": "ollama-fast",
+        "backend_type": "ollama",
+        "model_ref": "replace-with-already-pulled-local-model-tag",
+        "modalities": [
+          "text"
+        ],
+        "task_quality": {
+          "general": 0.75,
+          "tool_planning": 0.68
+        },
+        "task_latency_ms": {
+          "general": 65,
+          "tool_planning": 60
+        },
+        "estimated_vram_gb": 6,
+        "max_context_tokens": 4096,
+        "local_only": true,
+        "enabled": false,
+        "eval_set_version": "replace-with-your-frozen-eval-set-version",
+        "model_revision": "replace-with-Ollama-model-digest",
+        "parameter_count": 8000000000
+      },
+      "backend_args": {
+        "base_url": "http://127.0.0.1:11434",
+        "timeout_seconds": 180
+      }
+    },
+    {
+      "profile": {
+        "model_id": "llama-cpp-local-vlm",
+        "backend_type": "llama-cpp",
+        "model_ref": "local-vlm",
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "task_quality": {
+          "general": 0.79,
+          "visual_qa": 0.84,
+          "ocr": 0.72
+        },
+        "task_latency_ms": {
+          "general": 125,
+          "visual_qa": 190,
+          "ocr": 220
+        },
+        "estimated_vram_gb": 10,
+        "max_context_tokens": 8192,
+        "local_only": true,
+        "enabled": false,
+        "eval_set_version": "replace-with-your-frozen-eval-set-version",
+        "model_revision": "replace-with-GGUF-and-mmproj-SHA256",
+        "parameter_count": 3000000000
+      },
+      "backend_args": {
+        "base_url": "http://127.0.0.1:8080/v1",
+        "timeout_seconds": 180,
+        "max_image_bytes": 10000000,
+        "max_images": 4
+      }
+    }
+  ],
+  "notes": [
+    "All scores above are illustrative placeholders, not measured results.",
+    "Replace task_quality and task_latency_ms with results from the same frozen eval-set version before enabling a model.",
+    "All model_ref paths must already exist locally; local-only Hugging Face loading forbids downloads.",
+    "Ollama models must be pulled beforehand; disable Ollama daemon network egress for strict offline deployment.",
+    "Never add API keys or secrets to this file.",
+    "llama.cpp accepts a localhost /v1/chat/completions endpoint and local image payloads; start llama-server with a matching VLM GGUF and mmproj before enabling.",
+    "The example model IDs, scores, VRAM estimates, and latencies are placeholders; run your own frozen benchmark before enabling them."
+  ]
+}
