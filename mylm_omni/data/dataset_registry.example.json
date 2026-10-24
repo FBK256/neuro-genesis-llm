@@ -1,0 +1,32 @@
+{
+  "text_datasets": [
+    {
+      "id": "Salesforce/wikitext",
+      "config": "wikitext-103-raw-v1",
+      "split": "train",
+      "text_fields": ["text"],
+      "license_to_verify": "cc-by-sa-4.0",
+      "status": "example-only-not-approved",
+      "note": "Check the current dataset card, redistribution terms, and whether the configured text field is suitable."
+    }
+  ],
+  "multimodal_datasets": [
+    {
+      "id": "HuggingFaceM4/DocumentVQA",
+      "split": "train",
+      "image_field": "image",
+      "text_fields": ["question", "answers"],
+      "license_to_verify": "must-be-checked",
+      "status": "example-only-not-approved",
+      "note": "Field names and access may differ; inspect the current card before enabling."
+    }
+  ],
+  "policy": {
+    "download_only_after_license_review": true,
+    "keep_dataset_revision_and_row_id": true,
+    "deduplicate_text_and_images": true,
+    "remove_personal_information_where_required": true,
+    "keep_eval_split_separate_from_training": true,
+    "never_treat_generated_or_scraped_content_as_licensed_by_default": true
+  }
+}

@@ -1,0 +1,55 @@
+# Conservative pilot configuration. Benchmark first; these are starting values, not guarantees.
+hardware:
+  gpu: "RTX 3090 24GB"
+  max_wall_hours: 240
+  device: "cuda"
+  prefer_bf16: true
+
+model:
+  mode: "from_pretrained"   # from_pretrained | from_scratch
+  base_model: "Qwen/Qwen3-1.7B"
+  # A base model's license, tokenizer compatibility, and vision/audio support must be checked
+  # independently before use. This text-only checkpoint is not an all-in-one multimodal model.
+  context_length: 1024
+  gradient_checkpointing: true
+
+training:
+  seed: 20261024
+  max_steps: 2000
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 0.00002
+  warmup_ratio: 0.03
+  weight_decay: 0.1
+  max_grad_norm: 1.0
+  checkpoint_steps: 100
+  keep_step_checkpoints: 3
+  eval_steps: 100
+  resume: "auto"
+  save_safetensors: true
+
+distillation:
+  enabled: false
+  warmup_sft_steps: 200
+  top_k: 32
+  use_tail_mass_bucket: true
+  # Activate TAID or on-policy reverse-KL only as separately logged experiments.
+  method: "none"
+
+memory:
+  backend: "sqlite"
+  retrieval_statuses: ["active"]
+  require_sources_for_semantic_facts: true
+  permanent_delete_requires_human_approval: true
+
+tracking:
+  wandb_enabled: true
+  run_name_format: "MyLM-omni-{parameter-count}-reasoning-{execution-datetime}"
+  log_every_steps: 10
+
+acceptance:
+  fixed_eval_set_version: "v1"
+  max_regression_pp: 1.0
+  require_no_nan_inf: true
+  require_tool_policy_tests: true
+  promote_only_after_eval: true
