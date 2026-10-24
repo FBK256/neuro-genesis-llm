@@ -91,6 +91,12 @@ The new `scratch-300m.json` uses factorized tied embeddings (`embedding_dim=384`
 100.7M parameters and the full model about **293M parameters**. The hidden state is projected
 to and from the embedding dimension; vocabulary logits reuse the same token table.
 
+Initialization uses a normal distribution (standard deviation 0.02) for embeddings and linear
+weights, unit weights for RMSNorm, and depth-scaled initialization for attention-output and
+FFN-down projections. That is a more appropriate baseline for a deep residual Transformer than
+PyTorch's generic Linear/Embedding defaults; it still requires loss/gradient and validation
+monitoring during actual training.
+
 `max_position_embeddings=262144` is a configured positional ceiling, not proof of 256K
 training fit or long-context quality. RoPE theta is 1,000,000, but context quality requires
 progressive length training and fixed long-context evaluation. Training defaults to 1,024
