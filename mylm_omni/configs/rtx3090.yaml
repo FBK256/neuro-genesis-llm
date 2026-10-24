@@ -15,7 +15,7 @@ model:
   scratch_config: "configs/scratch-300m.json"
   gradient_checkpointing: true
   factorized_vocab_embedding_dim: 384
-  vocabulary_loss_chunk_size: 32
+  vocabulary_loss_chunk_size: 64
 
 training:
   seed: 20261024

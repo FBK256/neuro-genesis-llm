@@ -95,7 +95,7 @@ to and from the embedding dimension; vocabulary logits reuse the same token tabl
 training fit or long-context quality. RoPE theta is 1,000,000, but context quality requires
 progressive length training and fixed long-context evaluation. Training defaults to 1,024
 tokens, activation checkpointing, BF16 autocast where supported, fused CUDA AdamW where
-available, and chunked vocabulary loss. Right-padded text batches avoid materializing a
+available, and chunked vocabulary loss with 64-token chunks. Right-padded text batches avoid materializing a
 quadratic causal-plus-padding mask. Chunked loss recomputes the output projection during
 backward, trading some throughput for lower peak memory. Start at 1,024; grow through 2,048,
 4,096 and 8,192 only after VRAM and validation checks.

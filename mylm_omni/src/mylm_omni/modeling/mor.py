@@ -252,7 +252,9 @@ class CausalSelfAttention(nn.Module):
             batch, seq_len, self.num_kv_heads, self.head_dim
         ).transpose(1, 2)
         key_positions = torch.arange(seq_len, device=x.device).expand(batch, -1)
-        q, k = _apply_rope(q, k, q_positions=indices, k_positions=key_positions)
+        q, k = _apply_rope(
+            q, k, q_positions=indices, k_positions=key_positions, theta=self.rope_theta
+        )
 
         repeat_factor = self.num_heads // self.num_kv_heads
         if repeat_factor > 1:
@@ -391,6 +393,21 @@ class MyLMForCausalLM(nn.Module):
     def _vocabulary_logits(self, hidden: torch.Tensor) -> torch.Tensor:
         """Project hidden states to embedding space, then apply the tied token matrix."""
         return F.linear(self.lm_head(hidden), self.embed_tokens.weight)
+
+    @torch.no_grad()
+    def _chunked_lm_accuracy(
+        self, hidden: torch.Tensor, shifted_labels: torch.Tensor
+    ) -> tuple[int, int]:
+        """Exact top-1 accuracy in chunks without retaining full-sequence logits."""
+        valid = shifted_labels.ne(-100)
+        correct = torch.zeros((), dtype=torch.long, device=hidden.device)
+        chunk_size = self.config.vocab_loss_chunk_size
+        for start in range(0, hidden.shape[1], chunk_size):
+            end = min(start + chunk_size, hidden.shape[1])
+            logits = self._vocabulary_logits(hidden[:, start:end, :])
+            targets = shifted_labels[:, start:end]
+            correct += ((logits.argmax(dim=-1) == targets) & targets.ne(-100)).sum()
+        return int(correct.item()), int(valid.sum().item())
 
     def _chunked_lm_loss(
         self, hidden: torch.Tensor, shifted_labels: torch.Tensor
@@ -612,6 +629,8 @@ class MyLMForCausalLM(nn.Module):
         loss = None
         lm_loss = None
         depth_cost = x.new_zeros((), dtype=torch.float32)
+        correct_tokens = 0
+        supervised_tokens = 0
         if labels is not None:
             # Next-token prediction. Ignore image prefix and any masked label positions.
             shift_labels = labels[:, 1:].contiguous()
@@ -626,6 +645,12 @@ class MyLMForCausalLM(nn.Module):
                 )
             else:
                 lm_loss = self._chunked_lm_loss(x[:, :-1, :], shift_labels)
+                if not self.training:
+                    correct_tokens, supervised_tokens = self._chunked_lm_accuracy(
+                        x[:, :-1, :], shift_labels
+                    )
+            if return_logits:
+                supervised_tokens = int(shift_labels.ne(-100).sum().item())
             if self.config.depth_cost_weight:
                 if attention_mask is not None:
                     active = attention_mask.to(device=expected_depth.device, dtype=torch.bool)
@@ -645,6 +670,8 @@ class MyLMForCausalLM(nn.Module):
             "loss": loss,
             "lm_loss": lm_loss,
             "depth_cost": depth_cost,
+            "correct_tokens": correct_tokens,
+            "supervised_tokens": supervised_tokens,
         }
         if return_trace:
             valid_tokens = (

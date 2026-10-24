@@ -92,26 +92,15 @@ def evaluate(
                 labels=batch["labels"],
                 image_features=batch.get("image_features"),
                 image_attention_mask=batch.get("image_attention_mask"),
-                return_trace=True
+                return_trace=True,
+                return_logits=False,
             )
             loss = output["lm_loss"]
-        eval_labels = batch["labels"]
-        if batch.get("image_features") is not None:
-            prefix_len = batch["image_features"].shape[1]
-            prefix_labels = torch.full(
-                (eval_labels.shape[0], prefix_len), -100,
-                device=eval_labels.device, dtype=eval_labels.dtype,
-            )
-            eval_labels = torch.cat((prefix_labels, eval_labels), dim=1)
-        shifted_labels = eval_labels[:, 1:]
-        shifted_logits = output["logits"][:, :-1, :]
-        valid = shifted_labels.ne(-100)
-        token_count += int(valid.sum().item())
-        correct_count += int(
-            ((shifted_logits.argmax(dim=-1) == shifted_labels) & valid).sum().item()
-        )
-        # Weight per-token loss by the valid target count to avoid padding bias.
-        valid_n = int(valid.sum().item())
+        # Validation computes exact top-1 accuracy and loss in chunks instead of allocating
+        # the full [batch, sequence, vocabulary] tensor.
+        correct_count += int(output["correct_tokens"])
+        valid_n = int(output["supervised_tokens"])
+        token_count += valid_n
         if valid_n:
             loss_sum += float(loss.item()) * valid_n
         trace = output["trace"]

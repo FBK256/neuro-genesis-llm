@@ -205,6 +205,7 @@ def main() -> None:
                     labels=batch["labels"],
                     image_features=batch.get("image_features"),
                     image_attention_mask=batch.get("image_attention_mask"),
+                    return_logits=False,
                 )
                 loss = output["loss"]
             if loss is None or not bool(torch.isfinite(loss)):

@@ -246,3 +246,43 @@ def test_right_padding_uses_implicit_causal_mask(monkeypatch):
         attn(torch.randn(1, 8, 32), attention_mask=torch.tensor([[1, 1, 1, 1, 0, 0, 0, 0]]))
     assert observed["attn_mask"] is None
     assert observed["is_causal"] is True
+
+
+
+def test_active_query_path_uses_configured_rope_theta(monkeypatch):
+    from mylm_omni.modeling import mor
+
+    config = MyLMConfig(
+        vocab_size=64, embedding_dim=16, hidden_size=32, num_layers=1,
+        num_heads=4, num_kv_heads=2, intermediate_size=64,
+        max_position_embeddings=16, max_recurrent_steps=2, rope_theta=123456.0,
+    )
+    seen = []
+    original = mor._apply_rope
+
+    def wrapped(q, k, q_positions=None, k_positions=None, theta=10000.0):
+        seen.append(theta)
+        return original(q, k, q_positions=q_positions, k_positions=k_positions, theta=theta)
+
+    monkeypatch.setattr(mor, "_apply_rope", wrapped)
+    model = MyLMForCausalLM(config).eval()
+    with torch.no_grad():
+        model(torch.tensor([[1, 2, 3]]), adaptive_inference=True)
+    assert seen and all(value == 123456.0 for value in seen)
+
+
+def test_chunked_eval_metrics_do_not_require_full_vocabulary_logits():
+    config = MyLMConfig(
+        vocab_size=71, embedding_dim=16, hidden_size=32, num_layers=1,
+        num_heads=4, num_kv_heads=2, intermediate_size=64,
+        max_position_embeddings=32, max_recurrent_steps=1,
+        vocab_loss_chunk_size=3,
+    )
+    model = MyLMForCausalLM(config).eval()
+    ids = torch.tensor([[1, 2, 3, 4, 5]])
+    with torch.no_grad():
+        output = model(ids, labels=ids, return_logits=False)
+    assert output["logits"] is None
+    assert output["supervised_tokens"] == 4
+    assert 0 <= output["correct_tokens"] <= 4
+    assert torch.isfinite(output["lm_loss"])
