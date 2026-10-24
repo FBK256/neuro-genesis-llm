@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from mylm_omni.modeling import MyLMConfig, MyLMForCausalLM
@@ -138,3 +139,49 @@ def test_generate_with_trace_exports_routing_and_per_layer_diagnostics():
     assert len(first_step["selected_depth_for_context_tokens"][0]) <= 3
     assert first_step["forward_elapsed_ms"] >= 0
     assert trace["total_elapsed_ms"] >= 0
+
+
+
+def test_max_position_embeddings_is_canonical_and_legacy_alias_still_works():
+    config = MyLMConfig(
+        vocab_size=64,
+        hidden_size=32,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        intermediate_size=64,
+        max_position_embeddings=8,
+        max_recurrent_steps=2,
+    )
+    assert config.max_position_embeddings == 8
+    assert config.max_seq_len == 8
+    assert config.to_dict()["max_position_embeddings"] == 8
+    assert "max_seq_len" not in config.to_dict()
+
+    legacy = MyLMConfig(
+        vocab_size=64,
+        hidden_size=32,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        intermediate_size=64,
+        max_seq_len=6,
+        max_recurrent_steps=2,
+    )
+    assert legacy.max_position_embeddings == 6
+    assert legacy.max_seq_len == 6
+
+
+def test_forward_enforces_max_position_embeddings():
+    model = MyLMForCausalLM(MyLMConfig(
+        vocab_size=64,
+        hidden_size=32,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        intermediate_size=64,
+        max_position_embeddings=4,
+        max_recurrent_steps=2,
+    )).eval()
+    with pytest.raises(ValueError, match="max_position_embeddings=4"):
+        model(torch.tensor([[1, 2, 3, 4, 5]]))

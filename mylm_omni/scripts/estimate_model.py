@@ -34,6 +34,7 @@ def main() -> None:
         "parameter_count": count,
         "parameter_count_billions": count / 1e9,
         "config_vocab_size": config.vocab_size,
+        "max_position_embeddings": config.max_position_embeddings,
         "hidden_size": config.hidden_size,
         "unique_layers": config.num_layers,
         "shared_recurrent_depth": config.max_recurrent_steps,

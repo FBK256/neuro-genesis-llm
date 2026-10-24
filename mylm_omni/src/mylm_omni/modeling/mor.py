@@ -20,13 +20,15 @@ import torch.nn.functional as F
 class MyLMConfig:
     """Shape and runtime configuration for the scratch research model."""
 
-    vocab_size: int = 32_000
+    vocab_size: int = 262_144
     hidden_size: int = 512
     num_layers: int = 8
     num_heads: int = 8
     num_kv_heads: int = 2
     intermediate_size: int = 1_376
-    max_seq_len: int = 4_096
+    max_position_embeddings: int = 262_144
+    # Backward-compatibility alias. New configs should use max_position_embeddings.
+    max_seq_len: int | None = None
     max_recurrent_steps: int = 4
     gradient_checkpointing: bool = True
     dropout: float = 0.0
@@ -35,6 +37,18 @@ class MyLMConfig:
     rms_norm_eps: float = 1e-6
 
     def __post_init__(self) -> None:
+        # Old configs and callers may still provide max_seq_len.
+        if self.max_seq_len is not None:
+            if (
+                self.max_position_embeddings != 262_144
+                and self.max_position_embeddings != self.max_seq_len
+            ):
+                raise ValueError(
+                    "max_position_embeddings and legacy max_seq_len must match"
+                )
+            self.max_position_embeddings = self.max_seq_len
+        # Keep the legacy attribute synchronized for existing code.
+        self.max_seq_len = self.max_position_embeddings
         if self.vocab_size < 8:
             raise ValueError("vocab_size must be at least 8")
         if self.hidden_size <= 0 or self.num_layers < 1:
@@ -47,14 +61,16 @@ class MyLMConfig:
             raise ValueError("head dimension must be even for RoPE")
         if self.max_recurrent_steps < 1:
             raise ValueError("max_recurrent_steps must be >= 1")
-        if self.max_seq_len < 1:
-            raise ValueError("max_seq_len must be positive")
+        if self.max_position_embeddings < 1:
+            raise ValueError("max_position_embeddings must be positive")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1)")
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable copy for manifests and experiment records."""
-        return asdict(self)
+        """Return canonical JSON settings without the deprecated max_seq_len alias."""
+        config = asdict(self)
+        config.pop("max_seq_len", None)
+        return config
 
 
 class RMSNorm(nn.Module):
@@ -437,9 +453,11 @@ class MyLMForCausalLM(nn.Module):
                 )
                 labels = torch.cat((prefix_labels, labels), dim=1)
 
-        if x.shape[1] > self.config.max_seq_len:
+        if x.shape[1] > self.config.max_position_embeddings:
             raise ValueError(
-                f"input length {x.shape[1]} exceeds max_seq_len={self.config.max_seq_len}"
+                "input length "
+                f"{x.shape[1]} exceeds max_position_embeddings="
+                f"{self.config.max_position_embeddings}"
             )
 
         layer_activation_stats = []

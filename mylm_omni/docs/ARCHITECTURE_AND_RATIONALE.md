@@ -77,6 +77,22 @@ The implementation order is:
 
 Matrix-of-Thought is initially better implemented as outer orchestration—generate a few candidate approaches, critique with evidence, merge or reject—rather than as an unverified internal hidden-state algorithm.
 
+### Vocabulary and context-length settings
+
+The scratch-model baseline is configured with a **262,144-token vocabulary** and
+`max_position_embeddings=262144`. The tied input embedding/output projection means that
+moving from 32K to 256K tokens adds about **471.9 million parameters** at hidden size 2048;
+the resulting `scratch-1b.json` model is approximately **1.66B parameters**, not 1B. Use
+`scripts/estimate_model.py` as the actual source of truth for the chosen configuration.
+
+The 256K value is a configured upper bound, **not a claim that 256K-token training or inference
+fits on an RTX 3090**. This implementation still uses dense causal attention and emits full
+vocabulary logits during training. At long sequence lengths, attention computation, masks and
+logit tensors can dominate memory/time. The training CLI intentionally retains a separate
+`--max-seq-len` cap (default 1024); raise it only after measuring the exact model, attention
+backend, batch size, dtype and loss path. 256K context quality also requires long-context
+training/evaluation; RoPE alone does not establish it.
+
 ## 4. Practical multimodal path versus scratch model
 
 There are two distinct goals:

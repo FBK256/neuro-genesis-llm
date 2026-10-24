@@ -50,8 +50,10 @@ The JSON tokenizer must be trained first on curated text. Example:
 python scripts/train_tokenizer.py \
   --input-jsonl data/text/curated.jsonl \
   --output-dir tokenizer/mylm-omni \
-  --vocab-size 32000
+  --vocab-size 262144
 ```
+
+The baseline target vocabulary is 262,144. The trainer may produce fewer tokens if the corpus cannot support the requested number of merges; always use the actual `vocab_size` from `tokenizer/.../manifest.json` in the model config. The scratch baseline's configured maximum is `max_position_embeddings=262144`, but the training CLI defaults to `--max-seq-len 1024` to keep the initial run bounded. The current dense-attention/full-logit implementation is not validated for 256K-token execution, especially on 24GB VRAM.
 
 Then tokenize with a tokenizer-specific preprocessing adapter. The current `prepare_text_dataset.py` creates `input_ids` JSONL for full-sequence language modelling; if training the custom model, ensure `model-config.vocab_size` exactly equals the trained tokenizer size.
 
@@ -66,7 +68,7 @@ python scripts/train_scratch.py \
   --checkpoint-steps 10 --output-dir runs/mylm-smoke
 ```
 
-The roughly 1B-class config is a research starting point, not a pre-trained model or a fit guarantee:
+The `scratch-1b.json` filename is retained for continuity, but with a 262,144-token tied vocabulary this configuration is approximately 1.66B parameters. It is a research starting point, not a pre-trained model or a fit guarantee:
 
 ```bash
 python scripts/estimate_model.py --model-config configs/scratch-1b.json --activation-gb 12

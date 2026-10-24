@@ -41,7 +41,7 @@ def main() -> None:
     parser.add_argument("--input-jsonl", nargs="+", required=True)
     parser.add_argument("--output-dir", default="tokenizer/mylm-omni")
     parser.add_argument("--text-field", default="text")
-    parser.add_argument("--vocab-size", type=int, default=32_000)
+    parser.add_argument("--vocab-size", type=int, default=262_144)
     parser.add_argument("--min-frequency", type=int, default=2)
     parser.add_argument("--show-progress", action="store_true")
     args = parser.parse_args()

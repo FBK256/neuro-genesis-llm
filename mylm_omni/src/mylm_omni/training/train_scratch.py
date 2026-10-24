@@ -205,7 +205,10 @@ def main() -> None:
 
     raw_config = _read_json(args.model_config)
     model_config = MyLMConfig(**raw_config)
-    model_config.max_seq_len = min(model_config.max_seq_len, args.max_seq_len)
+    model_config.max_position_embeddings = min(
+        model_config.max_position_embeddings, args.max_seq_len
+    )
+    model_config.max_seq_len = model_config.max_position_embeddings
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     amp_enabled, amp_dtype = _autocast_settings(device)
 
@@ -220,7 +223,7 @@ def main() -> None:
     metrics_path = output_dir / "metrics.jsonl"
 
     train_data = JsonlTokenDataset(args.train_jsonl)
-    collator = TokenBatchCollator(args.pad_token_id, model_config.max_seq_len)
+    collator = TokenBatchCollator(args.pad_token_id, model_config.max_position_embeddings)
     sampler = EpochRandomSampler(train_data, seed=args.seed, epoch=0)
     train_loader = DataLoader(
         train_data, batch_size=args.batch_size, sampler=sampler,
